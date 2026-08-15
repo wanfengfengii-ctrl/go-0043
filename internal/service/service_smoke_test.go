@@ -2,6 +2,7 @@ package service_test
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -112,5 +113,105 @@ func TestSmokeRolloutDispatchAckAdvance(t *testing.T) {
 	r3, _ := h.Service.GetRollout(ctx, r.ID)
 	if r3.State != domain.StateCompleted {
 		t.Fatalf("rollout state = %s, want completed", r3.State)
+	}
+}
+
+func TestMultiNodeDispatchAdvancesOnStartAndRecovery(t *testing.T) {
+	ctx := context.Background()
+
+	start := testkit.NewHarness(t)
+	cfg, _, err := start.Service.CreateConfig(ctx, service.CreateConfigRequest{
+		Baseline: 0, Content: `{"f":1}`, RequestKey: "multi-start",
+	})
+	if err != nil {
+		t.Fatalf("create start config: %v", err)
+	}
+	for _, id := range []string{"n1", "n2"} {
+		if err := start.Service.UpsertNode(ctx, domain.Node{ID: id, Labels: map[string]string{"zone": "start"}, Online: true}); err != nil {
+			t.Fatalf("upsert start node %s: %v", id, err)
+		}
+	}
+	if _, err := start.Service.UpsertGroup(ctx, domain.Group{ID: "start-group", Selector: domain.LabelSelector{MatchLabels: map[string]string{"zone": "start"}}}); err != nil {
+		t.Fatalf("upsert start group: %v", err)
+	}
+	sess1, n1 := connectNode(t, start, "n1", vnode.Behavior{AckLevel: domain.AckConfirmed})
+	sess2, n2 := connectNode(t, start, "n2", vnode.Behavior{AckLevel: domain.AckConfirmed})
+	r, err := start.Service.CreateRollout(ctx, service.CreateRolloutRequest{
+		ID: "start-rollout", TargetConfigVersion: cfg.Version, GroupID: "start-group",
+		Stages: []service.StageSpec{{
+			Name: "stage", Target: domain.StageTarget{Kind: domain.TargetCount, Count: 2},
+			MinSuccessRate: 1, MaxFailures: 0, AckTimeout: time.Minute,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("create start rollout: %v", err)
+	}
+	if _, err := start.Service.StartRollout(ctx, r.ID); err != nil {
+		t.Fatalf("start rollout: %v", err)
+	}
+	start.Sched.Advance(start.Clock.Now())
+	pumpQuiescent(t, sess1, n1)
+	pumpQuiescent(t, sess2, n2)
+	if got := len(n1.Dispatches()); got != 1 {
+		t.Fatalf("start n1 dispatches = %d, want 1", got)
+	}
+	if got := len(n2.Dispatches()); got != 1 {
+		t.Fatalf("start n2 dispatches = %d, want 1", got)
+	}
+
+	path := filepath.Join(t.TempDir(), "recovery.db")
+	before := testkit.NewFileHarness(t, path)
+	cfg, _, err = before.Service.CreateConfig(ctx, service.CreateConfigRequest{
+		Baseline: 0, Content: `{"f":2}`, RequestKey: "multi-recovery",
+	})
+	if err != nil {
+		t.Fatalf("create recovery config: %v", err)
+	}
+	for _, id := range []string{"r1", "r2", "r3"} {
+		if err := before.Service.UpsertNode(ctx, domain.Node{ID: id, Labels: map[string]string{"zone": "recovery"}, Online: true}); err != nil {
+			t.Fatalf("upsert recovery node %s: %v", id, err)
+		}
+	}
+	if _, err := before.Service.UpsertGroup(ctx, domain.Group{ID: "recovery-group", Selector: domain.LabelSelector{MatchLabels: map[string]string{"zone": "recovery"}}}); err != nil {
+		t.Fatalf("upsert recovery group: %v", err)
+	}
+	r, err = before.Service.CreateRollout(ctx, service.CreateRolloutRequest{
+		ID: "recovery-rollout", TargetConfigVersion: cfg.Version, GroupID: "recovery-group",
+		Stages: []service.StageSpec{{
+			Name: "stage", Target: domain.StageTarget{Kind: domain.TargetCount, Count: 3},
+			MinSuccessRate: 1, MaxFailures: 0, AckTimeout: time.Minute,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("create recovery rollout: %v", err)
+	}
+	if _, err := before.Service.StartRollout(ctx, r.ID); err != nil {
+		t.Fatalf("start recovery rollout: %v", err)
+	}
+	if err := before.Store.Close(); err != nil {
+		t.Fatalf("close pre-recovery store: %v", err)
+	}
+
+	after := testkit.NewFileHarness(t, path)
+	sessR2, nodeR2 := connectNode(t, after, "r2", vnode.Behavior{AckLevel: domain.AckConfirmed})
+	sessR3, nodeR3 := connectNode(t, after, "r3", vnode.Behavior{AckLevel: domain.AckConfirmed})
+	if err := after.Service.Recover(ctx); err != nil {
+		t.Fatalf("recover rollout: %v", err)
+	}
+	after.Sched.Advance(after.Clock.Now())
+	pumpQuiescent(t, sessR2, nodeR2)
+	pumpQuiescent(t, sessR3, nodeR3)
+	if got := len(nodeR2.Dispatches()); got != 1 {
+		t.Fatalf("recovery r2 dispatches = %d, want 1", got)
+	}
+	if got := len(nodeR3.Dispatches()); got != 1 {
+		t.Fatalf("recovery r3 dispatches = %d, want 1", got)
+	}
+	progress, err := after.Service.GetProgress(ctx, r.ID)
+	if err != nil {
+		t.Fatalf("get recovery progress: %v", err)
+	}
+	if got := progress.Stages[0].Dispatched; got != 3 {
+		t.Fatalf("recovery dispatch cursor = %d, want 3", got)
 	}
 }

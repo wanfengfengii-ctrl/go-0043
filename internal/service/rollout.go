@@ -25,10 +25,10 @@ type StageSpec struct {
 
 // CreateRolloutRequest defines a new rollout.
 type CreateRolloutRequest struct {
-	ID                string // optional; generated if empty
-	TargetConfigVersion  domain.ConfigVersion
-	GroupID           string
-	Stages            []StageSpec
+	ID                  string // optional; generated if empty
+	TargetConfigVersion domain.ConfigVersion
+	GroupID             string
+	Stages              []StageSpec
 }
 
 // CreateRollout binds a target config version, the baseline config version and a
@@ -157,8 +157,7 @@ func (s *Service) openStage(ctx context.Context, r *domain.Rollout, idx int) {
 // dispatchNextNode dispatches the config to the next undispatched node in the
 // stage. It respects pause: if the rollout is paused, no new dispatch occurs.
 // It records the dispatch and, if more nodes remain, schedules the next
-// dispatch. For tests the next dispatch is driven by calling this method again
-// (or by the scheduler in production).
+// dispatch. The scheduler drives each subsequent dispatch.
 func (s *Service) dispatchNextNode(ctx context.Context, r *domain.Rollout, idx int) {
 	if r.State == domain.StatePaused || r.State.IsTerminal() {
 		return
@@ -200,6 +199,28 @@ func (s *Service) dispatchNextNode(ctx context.Context, r *domain.Rollout, idx i
 			s.handleAckTimeout(ctx, r.ID, idx, nodeID, attempt)
 		},
 	})
+	// Keep incremental dispatch moving until the stage snapshot is exhausted.
+	// Reload state in the callback so a pause, resume, or ack processed before
+	// the task runs cannot be overwritten by this dispatch continuation.
+	if st.DispatchCursor < len(st.NodeSnapshot) {
+		s.sched.Schedule(scheduler.Task{
+			At: s.clk.Now(), RolloutID: r.ID, StageIndex: idx, Attempt: attempt,
+			Kind: scheduler.TaskOpenStage,
+			Fn: func() {
+				lock := s.rolloutLock(r.ID)
+				lock.Lock()
+				defer lock.Unlock()
+				next, err := s.loadRollout(ctx, r.ID)
+				if err != nil {
+					return
+				}
+				if next.CurrentAttempt != attempt {
+					return
+				}
+				s.dispatchNextNode(ctx, &next, idx)
+			},
+		})
+	}
 }
 
 // handleAckTimeout marks a node as failed if it has not reached the required ack
