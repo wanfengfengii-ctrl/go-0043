@@ -49,14 +49,21 @@ func (s *Service) AcceptSession(ctx context.Context, nodeID string, wire transpo
 	prior := s.findPriorSession(ctx, nodeID)
 	expected := int64(1)
 	lastSent := int64(0)
+	// lastCommitted is the persisted "last fully processed incoming sequence".
+	// On resume it is read directly from the prior session's watermark so that
+	// the persisted value (not a value derived from expected_seq) survives the
+	// reconnect boundary. For a fresh session nothing has been committed, so it
+	// stays 0 (== expected-1).
+	lastCommitted := int64(0)
 	if prior != nil {
 		expected = prior.ExpectedSeq
 		lastSent = prior.LastSentSeq
+		lastCommitted = prior.LastCommittedSeq
 	}
 	if err := s.store.UpsertSession(ctx, store.Session{
 		SessionID:        sessID,
 		NodeID:           nodeID,
-		LastCommittedSeq: expected - 1,
+		LastCommittedSeq: lastCommitted,
 		ExpectedSeq:      expected,
 		LastSentSeq:      lastSent,
 	}); err != nil {

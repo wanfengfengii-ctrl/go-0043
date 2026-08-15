@@ -49,9 +49,12 @@ func (s *Store) GetSession(ctx context.Context, sessionID int64) (Session, error
 	return sess, nil
 }
 
-// AdvanceSession commits the next expected sequence for a session. It is a CAS:
-// it only advances if the current expected_seq equals fromSeq, preventing lost
-// updates under concurrency. Returns the new expected seq and whether the CAS
+// AdvanceSession commits an in-order incoming frame for a session. It is a
+// CAS: it only advances if the current expected_seq equals fromSeq, preventing
+// lost updates under concurrency. expected_seq becomes toSeq (the next expected
+// incoming sequence) while last_committed_seq becomes fromSeq (the sequence
+// just fully processed), so the persisted watermark never runs ahead of actual
+// processing progress. Returns the new expected seq and whether the CAS
 // succeeded.
 func (s *Store) AdvanceSession(ctx context.Context, sessionID int64, fromSeq, toSeq int64) (int64, bool, error) {
 	var newExpected int64 = toSeq
@@ -59,7 +62,7 @@ func (s *Store) AdvanceSession(ctx context.Context, sessionID int64, fromSeq, to
 	err := s.InTx(ctx, func(tx *sql.Tx) error {
 		res, err := tx.ExecContext(ctx,
 			`UPDATE sessions SET expected_seq=?, last_committed_seq=?, updated_at=? WHERE session_id=? AND expected_seq=?`,
-			toSeq, toSeq, nowNano(), sessionID, fromSeq)
+			toSeq, fromSeq, nowNano(), sessionID, fromSeq)
 		if err != nil {
 			return err
 		}
