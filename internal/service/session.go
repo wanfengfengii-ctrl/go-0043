@@ -64,7 +64,7 @@ func (s *Service) AcceptSession(ctx context.Context, nodeID string, wire transpo
 	}
 	// Move any pending frames from the prior session to the new one and replay.
 	if prior != nil {
-		s.replayPendingFrames(ctx, prior.SessionID, sessID)
+		s.replayPendingFrames(ctx, prior.SessionID, sessID, wire)
 	}
 	sess := &Session{
 		svc:    s,
@@ -93,8 +93,13 @@ func (s *Service) findPriorSession(ctx context.Context, nodeID string) *store.Se
 }
 
 // replayPendingFrames re-enqueues unacknowledged outgoing frames from a prior
-// session onto the new session and writes them to the wire immediately.
-func (s *Service) replayPendingFrames(ctx context.Context, fromSess, toSess int64) {
+// session onto the new session and writes them to the wire immediately so a
+// reconnecting node can resume processing without losing dispatches. The
+// re-enqueue keeps the frames persisted under the new session id, so a further
+// disconnect (before the peer acks) replays them again.
+func (s *Service) replayPendingFrames(ctx context.Context, fromSess, toSess int64, wire transport.Wire) {
+	// PendingFramesAfter returns frames in ascending seq order, which preserves
+	// the original delivery order for the replay.
 	frames, err := s.store.PendingFramesAfter(ctx, fromSess, 0)
 	if err != nil {
 		return
@@ -103,7 +108,16 @@ func (s *Service) replayPendingFrames(ctx context.Context, fromSess, toSess int6
 		if pf.Acked {
 			continue
 		}
-		_ = s.store.EnqueuePendingFrame(ctx, store.PendingFrame{SessionID: toSess, Seq: pf.Seq, Frame: pf.Frame})
+		// Persist under the new session before delivering, mirroring Send's
+		// enqueue-then-write ordering so a drop is never lossy.
+		if err := s.store.EnqueuePendingFrame(ctx, store.PendingFrame{SessionID: toSess, Seq: pf.Seq, Frame: pf.Frame}); err != nil {
+			return
+		}
+		// Deliver the replayed frame to the new connection in its original form
+		// (sequence number and payload unchanged) so the peer can dedup/ack it.
+		if _, err := wire.Write(pf.Frame); err != nil {
+			return
+		}
 	}
 }
 
