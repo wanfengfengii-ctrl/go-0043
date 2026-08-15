@@ -64,7 +64,7 @@ func (s *Service) AcceptSession(ctx context.Context, nodeID string, wire transpo
 	}
 	// Move any pending frames from the prior session to the new one and replay.
 	if prior != nil {
-		s.replayPendingFrames(ctx, prior.SessionID, sessID)
+		s.replayPendingFrames(ctx, prior.SessionID, sessID, wire)
 	}
 	sess := &Session{
 		svc:    s,
@@ -94,7 +94,7 @@ func (s *Service) findPriorSession(ctx context.Context, nodeID string) *store.Se
 
 // replayPendingFrames re-enqueues unacknowledged outgoing frames from a prior
 // session onto the new session and writes them to the wire immediately.
-func (s *Service) replayPendingFrames(ctx context.Context, fromSess, toSess int64) {
+func (s *Service) replayPendingFrames(ctx context.Context, fromSess, toSess int64, wire transport.Wire) {
 	frames, err := s.store.PendingFramesAfter(ctx, fromSess, 0)
 	if err != nil {
 		return
@@ -103,7 +103,10 @@ func (s *Service) replayPendingFrames(ctx context.Context, fromSess, toSess int6
 		if pf.Acked {
 			continue
 		}
-		_ = s.store.EnqueuePendingFrame(ctx, store.PendingFrame{SessionID: toSess, Seq: pf.Seq, Frame: pf.Frame})
+		if err := s.store.EnqueuePendingFrame(ctx, store.PendingFrame{SessionID: toSess, Seq: pf.Seq, Frame: pf.Frame}); err != nil {
+			continue
+		}
+		_, _ = wire.Write(pf.Frame)
 	}
 }
 
