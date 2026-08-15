@@ -259,6 +259,9 @@ func (sess *Session) dispatchFrame(ctx context.Context, f protocol.Frame) error 
 		if err != nil {
 			return apperr.New(apperr.CodeBadRequest, "invalid ack payload")
 		}
+		if ap.NodeID != sess.nodeID {
+			return apperr.New(apperr.CodeBadRequest, "ack node id does not match session node id")
+		}
 		ack := domain.Ack{
 			RolloutID:     ap.RolloutID,
 			NodeID:        ap.NodeID,
