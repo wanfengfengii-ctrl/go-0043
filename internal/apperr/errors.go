@@ -26,6 +26,12 @@ const (
 	// CodeNotTargetNode is returned when an acknowledgement arrives from a node
 	// that is not part of the current stage target set.
 	CodeNotTargetNode Code = "not_target_node"
+	// CodeNodeMismatch is returned by the session layer when an inbound ack
+	// frame carries a node_id that does not match the node identity the session
+	// is bound to. A session established for node A must not be able to advance
+	// progress by submitting an ack that claims to be from node B; such a frame
+	// is rejected at the session boundary before it reaches the business layer.
+	CodeNodeMismatch Code = "node_mismatch"
 	// CodeStaleAttempt is returned when an acknowledgement targets an attempt
 	// that is older than the rollout's current attempt.
 	CodeStaleAttempt Code = "stale_attempt"

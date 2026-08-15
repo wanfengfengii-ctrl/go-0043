@@ -259,6 +259,18 @@ func (sess *Session) dispatchFrame(ctx context.Context, f protocol.Frame) error 
 		if err != nil {
 			return apperr.New(apperr.CodeBadRequest, "invalid ack payload")
 		}
+		// Identity check: an ack's claimed node_id must match the node the
+		// session is bound to. A session established for node A must not be able
+		// to advance progress by submitting an ack that claims to be from node B
+		// (who may be a current target when A is not). Reject the frame at the
+		// session boundary before it reaches the business layer; no business
+		// state is mutated and the session sequence is not advanced, consistent
+		// with how other protocol-level rejections (expected_sequence,
+		// protocol_conflict) are handled.
+		if ap.NodeID != sess.nodeID {
+			return apperr.Newf(apperr.CodeNodeMismatch,
+				"ack node_id %q does not match session node %q", ap.NodeID, sess.nodeID)
+		}
 		ack := domain.Ack{
 			RolloutID:     ap.RolloutID,
 			NodeID:        ap.NodeID,
