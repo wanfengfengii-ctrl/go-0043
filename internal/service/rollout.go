@@ -359,11 +359,23 @@ func (s *Service) onStageFailed(ctx context.Context, r *domain.Rollout, idx int)
 
 // completeAttempt finalises the current attempt. For a forward attempt where
 // all stages succeeded, the rollout completes. For a rollback attempt, the
-// rollout is rolled back.
+// rollout is rolled back. It acquires the rollout lock; callers that already
+// hold the lock (such as the recovery observe-end path) must call
+// completeAttemptLocked instead, because sync.Mutex is not reentrant.
 func (s *Service) completeAttempt(ctx context.Context, rolloutID string, attempt int) {
 	lock := s.rolloutLock(rolloutID)
 	lock.Lock()
 	defer lock.Unlock()
+	s.completeAttemptLocked(ctx, rolloutID, attempt)
+}
+
+// completeAttemptLocked is the lock-free body of completeAttempt. The caller
+// must already hold the rollout lock. Splitting the body out lets the recovery
+// observe-end path finalise an attempt without re-entering the lock: previously
+// recoverObservingStage held the lock and called completeAttempt, which tried
+// to acquire it again and deadlocked, so a recovered single-stage rollout could
+// never reach its terminal state.
+func (s *Service) completeAttemptLocked(ctx context.Context, rolloutID string, attempt int) {
 	r, err := s.loadRollout(ctx, rolloutID)
 	if err != nil {
 		return

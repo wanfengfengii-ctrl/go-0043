@@ -129,7 +129,11 @@ func (s *Service) recoverObservingStage(ctx context.Context, rolloutID string, i
 		return
 	}
 	if idx+1 >= len(r.Stages) {
-		s.completeAttempt(ctx, rolloutID, attempt)
+		// Last stage: finalise the attempt. We already hold the rollout lock,
+		// so use the lock-free variant; completeAttempt would re-acquire the
+		// (non-reentrant) mutex and deadlock, which is what previously left a
+		// recovered single-stage rollout stuck in observing forever.
+		s.completeAttemptLocked(ctx, rolloutID, attempt)
 		return
 	}
 	s.openStage(ctx, &r, idx+1)
