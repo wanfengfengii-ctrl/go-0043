@@ -286,6 +286,16 @@ func (s *Service) evaluateStage(ctx context.Context, r *domain.Rollout, idx int)
 	if resolved < target {
 		// Still in progress; persist recomputed success count.
 		_ = s.store.SaveRollout(ctx, *r, r.PlanRevision)
+		// Incremental-dispatch handoff: the stage is not yet resolved, so if it is
+		// still dispatching and nodes remain undispatched, drive the next dispatch
+		// now. This is the boundary between progress evaluation and incremental
+		// dispatch — the single point that keeps a multi-node stage moving on ack,
+		// on ack-timeout and on resume, without a manual dispatch tick. Dispatching
+		// one node here lets its ack (or timeout) re-enter evaluateStage and dispatch
+		// the next, so the stage sequentially covers every target node.
+		if st.State == domain.StageDispatching && st.DispatchCursor < len(st.NodeSnapshot) {
+			s.dispatchNextNode(ctx, r, idx)
+		}
 		return
 	}
 	// All resolved: decide.
