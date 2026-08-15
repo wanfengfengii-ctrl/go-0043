@@ -65,7 +65,7 @@ func (s *Service) rescheduleRollout(ctx context.Context, r domain.Rollout) {
 					At: s.clk.Now().Add(st.AckTimeout), RolloutID: r.ID,
 					StageIndex: idx, NodeID: nodeID, Attempt: attempt,
 					Kind: scheduler.TaskAckTimeout,
-					Fn: func() { s.handleAckTimeout(ctx, r.ID, idx, nodeID, attempt) },
+					Fn:   func() { s.handleAckTimeout(ctx, r.ID, idx, nodeID, attempt) },
 				})
 			}
 			// If there are undispatched nodes and the rollout is running, resume
@@ -129,7 +129,7 @@ func (s *Service) recoverObservingStage(ctx context.Context, rolloutID string, i
 		return
 	}
 	if idx+1 >= len(r.Stages) {
-		s.completeAttempt(ctx, rolloutID, attempt)
+		s.completeAttemptLocked(ctx, rolloutID, attempt)
 		return
 	}
 	s.openStage(ctx, &r, idx+1)

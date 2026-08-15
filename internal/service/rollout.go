@@ -25,10 +25,10 @@ type StageSpec struct {
 
 // CreateRolloutRequest defines a new rollout.
 type CreateRolloutRequest struct {
-	ID                string // optional; generated if empty
-	TargetConfigVersion  domain.ConfigVersion
-	GroupID           string
-	Stages            []StageSpec
+	ID                  string // optional; generated if empty
+	TargetConfigVersion domain.ConfigVersion
+	GroupID             string
+	Stages              []StageSpec
 }
 
 // CreateRollout binds a target config version, the baseline config version and a
@@ -364,6 +364,13 @@ func (s *Service) completeAttempt(ctx context.Context, rolloutID string, attempt
 	lock := s.rolloutLock(rolloutID)
 	lock.Lock()
 	defer lock.Unlock()
+	s.completeAttemptLocked(ctx, rolloutID, attempt)
+}
+
+// completeAttemptLocked finalises an attempt while the caller owns its
+// rollout lock. It avoids recursively acquiring the non-reentrant mutex during
+// recovery.
+func (s *Service) completeAttemptLocked(ctx context.Context, rolloutID string, attempt int) {
 	r, err := s.loadRollout(ctx, rolloutID)
 	if err != nil {
 		return
