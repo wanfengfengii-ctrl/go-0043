@@ -10,12 +10,12 @@ import (
 
 // Session holds the persisted protocol watermarks for a node stream session.
 type Session struct {
-	SessionID         int64
-	NodeID            string
-	LastCommittedSeq  int64 // last incoming sequence fully processed
-	ExpectedSeq       int64 // next expected incoming sequence
-	LastSentSeq       int64 // last outgoing sequence enqueued
-	UpdatedAt         time.Time
+	SessionID        int64
+	NodeID           string
+	LastCommittedSeq int64 // last incoming sequence fully processed
+	ExpectedSeq      int64 // next expected incoming sequence
+	LastSentSeq      int64 // last outgoing sequence enqueued
+	UpdatedAt        time.Time
 }
 
 // UpsertSession creates or updates a session's watermarks.
@@ -59,7 +59,7 @@ func (s *Store) AdvanceSession(ctx context.Context, sessionID int64, fromSeq, to
 	err := s.InTx(ctx, func(tx *sql.Tx) error {
 		res, err := tx.ExecContext(ctx,
 			`UPDATE sessions SET expected_seq=?, last_committed_seq=?, updated_at=? WHERE session_id=? AND expected_seq=?`,
-			toSeq, toSeq, nowNano(), sessionID, fromSeq)
+			toSeq, fromSeq, nowNano(), sessionID, fromSeq)
 		if err != nil {
 			return err
 		}
